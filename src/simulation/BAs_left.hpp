@@ -28,10 +28,10 @@ class VOX_HESS
 {
 public:
   vector<const PointCluster*> sig_vecs;
-  vector<const vector<PointCluster>*> plvec_voxels;
+  vector<const vector<PointCluster, Eigen::aligned_allocator<PointCluster>>*> plvec_voxels;
   vector<double> coeffs;
 
-  void push_voxel(vector<PointCluster> *vec_orig, const PointCluster *fix, double feat_eigen, int layer)
+  void push_voxel(vector<PointCluster, Eigen::aligned_allocator<PointCluster>> *vec_orig, const PointCluster *fix, double feat_eigen, int layer)
   {
     int process_size = 0;
     for(int i=0; i<win_size; i++)
@@ -52,7 +52,7 @@ public:
   void acc_evaluate(const vector<IMUST> &xs, int head, int end, Eigen::MatrixXd &Hess, Eigen::VectorXd &JacT, double &residual)
   {
     Hess.setZero(); JacT.setZero(); residual = 0;
-    vector<PointCluster> sig_tran(win_size);
+    vector<PointCluster, Eigen::aligned_allocator<PointCluster>> sig_tran(win_size);
     const int kk = 0;
 
     PLV(3) viRiTuk(win_size);
@@ -63,7 +63,7 @@ public:
 
     for(int a=head; a<end; a++)
     {
-      const vector<PointCluster> &sig_orig = *plvec_voxels[a];
+      const vector<PointCluster, Eigen::aligned_allocator<PointCluster>> &sig_orig = *plvec_voxels[a];
 
       PointCluster sig = *sig_vecs[a];
       for(int i=0; i<win_size; i++)
@@ -170,7 +170,7 @@ public:
     vector<PLM(4)*> Cs;
     for(int a=0; a<plvec_voxels.size(); a++)
     {
-      const vector<PointCluster> &sig_orig = *plvec_voxels[a];
+      const vector<PointCluster, Eigen::aligned_allocator<PointCluster>> &sig_orig = *plvec_voxels[a];
       PLM(4) *Co = new PLM(4)(win_size, Eigen::Matrix4d::Zero());
       for(int i=0; i<win_size; i++)
         Co->at(i) << sig_orig[i].P, sig_orig[i].v, sig_orig[i].v.transpose(), sig_orig[i].N;
@@ -292,14 +292,14 @@ public:
   void evaluate_only_residual(const vector<IMUST> &xs, double &residual)
   {
     residual = 0;
-    vector<PointCluster> sig_tran(win_size);
+    vector<PointCluster, Eigen::aligned_allocator<PointCluster>> sig_tran(win_size);
     int kk = 0; // The kk-th lambda value
 
     int gps_size = plvec_voxels.size();
 
     for(int a=0; a<gps_size; a++)
     {
-      const vector<PointCluster> &sig_orig = *plvec_voxels[a];
+      const vector<PointCluster, Eigen::aligned_allocator<PointCluster>> &sig_orig = *plvec_voxels[a];
       PointCluster sig = *sig_vecs[a];
 
       for(int i=0; i<win_size; i++)
@@ -350,7 +350,7 @@ public:
     vector<PLM(4)*> Cs;
     for(int a=0; a<plvec_voxels.size(); a++)
     {
-      const vector<PointCluster> &sig_orig = *plvec_voxels[a];
+      const vector<PointCluster, Eigen::aligned_allocator<PointCluster>> &sig_orig = *plvec_voxels[a];
       PLM(4) *Co = new PLM(4)(win_size, Eigen::Matrix4d::Zero());
       for(int i=0; i<win_size; i++)
         Co->at(i) << sig_orig[i].P, sig_orig[i].v, sig_orig[i].v.transpose(), sig_orig[i].N;
@@ -375,7 +375,7 @@ public:
 
       C << sig.P, sig.v, sig.v.transpose(), sig.N;
 
-      const vector<PointCluster> &sig_orig = *plvec_voxels[a];
+      const vector<PointCluster, Eigen::aligned_allocator<PointCluster>> &sig_orig = *plvec_voxels[a];
 
       vector<int> Ns(win_size, 0);
       PLM(4) &Co = *Cs[a];
@@ -476,7 +476,7 @@ public:
   {
     Rcov.setZero();
 
-    vector<PointCluster> sig_tran(win_size);
+    vector<PointCluster, Eigen::aligned_allocator<PointCluster>> sig_tran(win_size);
     const int kk = 0;
 
     PLV(3) viRiTuk(win_size);
@@ -493,7 +493,7 @@ public:
         fflush(stdout);
       }
 
-      const vector<PointCluster> &sig_orig = *plvec_voxels[a];
+      const vector<PointCluster, Eigen::aligned_allocator<PointCluster>> &sig_orig = *plvec_voxels[a];
       PointCluster sig = *sig_vecs[a];
 
       for(int i=0; i<win_size; i++)
@@ -617,12 +617,14 @@ public:
 
 class OCTO_TREE_NODE
 {
+
 public:
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   int octo_state; // 0(unknown), 1(mid node), 2(plane)
   int push_state;
   int layer;
   vector<PLV(3)> vec_orig, vec_tran;
-  vector<PointCluster> sig_orig, sig_tran;
+  vector<PointCluster, Eigen::aligned_allocator<PointCluster>> sig_orig, sig_tran;
   PointCluster fix_point;
   PLV(3) vec_fix;
 
@@ -738,8 +740,8 @@ public:
       }
 
       octo_state = 1; 
-      vector<PointCluster>().swap(sig_orig);
-      vector<PointCluster>().swap(sig_tran);
+      vector<PointCluster, Eigen::aligned_allocator<PointCluster>>().swap(sig_orig);
+      vector<PointCluster, Eigen::aligned_allocator<PointCluster>>().swap(sig_tran);
       for(int i=0; i<win_count; i++)
         cut_func(i);
     }

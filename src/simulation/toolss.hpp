@@ -277,7 +277,9 @@ bool time_compare(PointType &x, PointType &y) {return (x.curvature < y.curvature
 
 class PointCluster
 {
+
 public:
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
   Eigen::Matrix3d P;
   Eigen::Vector3d v;
   int N;
