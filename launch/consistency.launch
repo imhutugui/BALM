@@ -4,8 +4,9 @@
 	<param name="pnoise" type="double" value="0.02" />
 	<param name="file_path" type="string" value="$(find balm2)" />
         <node pkg="balm2" type="consistency" name="consistency" output="screen" >
-            <param name="bagfile" type="string" value="/home/south/data/calib0620cam4/post/internal/merged.bag"/>
-            <param name="sensor_json" type="string" value="/home/south/data/calib0620cam4/sensor.json"/>
+            <param name="bagfile" type="string" value="/home/south/data/calib0620_cam4/post/internal/south-slam-raw.bag"/>
+            <param name="sensor_json" type="string" value="/home/south/data/calib0620_cam4/sensor.json"/>
+            <param name="trajectoryfile" type="string" value="/home/south/data/calib0620_cam4/post/internal/trajectory.bag"/>
         </node>
 
 	<group if="$(arg rviz)">

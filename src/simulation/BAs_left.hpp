@@ -10,7 +10,7 @@
 #include <ros/ros.h>
 #include <random>
 
-int win_size = 100;
+int win_size = 500;
 int fix_size = 1;
 
 const double one_three = (1.0 / 3.0);

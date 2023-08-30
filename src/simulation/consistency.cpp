@@ -12,6 +12,7 @@
 #include <tf/transform_listener.h>
 #include <tf2_msgs/TFMessage.h>
 #include <geometry_msgs/TransformStamped.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <tf2_ros/buffer.h>
 #include <rosbag/bag.h>
 #include <rosbag/view.h>
@@ -63,8 +64,8 @@ geometry_msgs::Transform ToGeometryMsgTransform(const Eigen::Vector3d p, const E
 }
 
 std::vector<geometry_msgs::TransformStamped> ReadStaticTransformsFromJson(
-    const std::string& json_filename,
-    tf2_ros::Buffer* const tf_buffer) {
+        const std::string& json_filename,
+        tf2_ros::Buffer* const tf_buffer) {
     sensor_model cam0;
     sensor_model cam1;
     sensor_model cam2;
@@ -77,43 +78,52 @@ std::vector<geometry_msgs::TransformStamped> ReadStaticTransformsFromJson(
     std::vector<geometry_msgs::TransformStamped> transforms;
 
     // 添加imu的位姿信息
-    geometry_msgs::TransformStamped imuTransform;
+    geometry_msgs::TransformStamped imuTransform, baseTransform;
     imuTransform.transform =
-        ToGeometryMsgTransform(
-            Eigen::Vector3d(imu.position[0], imu.position[1], imu.position[2]),
+            ToGeometryMsgTransform(
+                Eigen::Vector3d(imu.position[0], imu.position[1], imu.position[2]),
             Eigen::Quaterniond(imu.orientation[3], imu.orientation[0],
-                               imu.orientation[1], imu.orientation[2]));
+            imu.orientation[1], imu.orientation[2]));
 
     imuTransform.child_frame_id = imu.name;
     imuTransform.header.frame_id = "base_link";
     tf_buffer->setTransform(imuTransform, "sensor_json", true);
     transforms.push_back(imuTransform);
+    ROS_INFO("IMU frame: %s", imu.name.c_str());
+
+    baseTransform.transform = ToGeometryMsgTransform(Eigen::Vector3d(0,0,0), Eigen::Quaterniond(1,0,0,0));
+    baseTransform.child_frame_id = "base_link";
+    baseTransform.header.frame_id = "trajectory_0";
+    tf_buffer->setTransform(baseTransform, "sensor_json", true);
+    transforms.push_back(baseTransform);
 
     // 添加水平lidar的位姿信息
     geometry_msgs::TransformStamped lidarHorizTransform;
     lidarHorizTransform.transform =
-        ToGeometryMsgTransform(
-            Eigen::Vector3d(lidar_horiz.position[0], lidar_horiz.position[1], lidar_horiz.position[2]),
+            ToGeometryMsgTransform(
+                Eigen::Vector3d(lidar_horiz.position[0], lidar_horiz.position[1], lidar_horiz.position[2]),
             Eigen::Quaterniond(lidar_horiz.orientation[3], lidar_horiz.orientation[0],
-                               lidar_horiz.orientation[1], lidar_horiz.orientation[2]));
+            lidar_horiz.orientation[1], lidar_horiz.orientation[2]));
 
     lidarHorizTransform.child_frame_id = lidar_horiz.name;
     lidarHorizTransform.header.frame_id = imu.name;
     tf_buffer->setTransform(lidarHorizTransform, "sensor_json", true);
     transforms.push_back(lidarHorizTransform);
+    ROS_INFO("laser horiz frame: %s", lidar_horiz.name.c_str());
 
     // 添加垂直lidar的位姿信息
     geometry_msgs::TransformStamped lidarVertTransfrom;
     lidarVertTransfrom.transform =
-        ToGeometryMsgTransform(
-            Eigen::Vector3d(lidar_vert.position[0], lidar_vert.position[1], lidar_vert.position[2]),
+            ToGeometryMsgTransform(
+                Eigen::Vector3d(lidar_vert.position[0], lidar_vert.position[1], lidar_vert.position[2]),
             Eigen::Quaterniond(lidar_vert.orientation[3], lidar_vert.orientation[0],
-                               lidar_vert.orientation[1], lidar_vert.orientation[2]));
+            lidar_vert.orientation[1], lidar_vert.orientation[2]));
 
     lidarVertTransfrom.child_frame_id = lidar_vert.name;
     lidarVertTransfrom.header.frame_id = lidar_horiz.name;
     tf_buffer->setTransform(lidarVertTransfrom, "sensor_json", true);
     transforms.push_back(lidarVertTransfrom);
+    ROS_INFO("laser vert frame: %s", lidar_vert.name.c_str());
 
     return transforms;
 }
@@ -124,6 +134,7 @@ int main(int argc, char **argv)
 {
     ros::init(argc, argv, "simu2");
     ros::NodeHandle n;
+    ros::NodeHandle nh("~");
 
     pub_test = n.advertise<sensor_msgs::PointCloud2>("/map_test", 100);
     pub_curr = n.advertise<sensor_msgs::PointCloud2>("/map_curr", 100);
@@ -133,64 +144,148 @@ int main(int argc, char **argv)
     ros::Publisher br = n.advertise<tf2_msgs::TFMessage>("/tf", 1000);
     tf::TransformListener listener(n);
 
-    n.param<double>("pnoise", pnoise, 0.02);
+    nh.param<double>("pnoise", pnoise, 0.02);
     string file_path;
-    n.param<string>("file_path", file_path, "");
+    nh.param<string>("file_path", file_path, "");
     string bagfile;
-    n.param<string>("bagfile", bagfile, "");
+    string trajectoryfile;
+    nh.param<string>("bagfile", bagfile, "");
+    nh.param<string>("trajectoryfile", trajectoryfile, "");
     string sensor_json;
-    n.param<string>("sensor_json", sensor_json, "");
-    ROS_INFO("bagfile: %s, sensor_json: %s", bagfile, sensor_json);
+    nh.param<string>("sensor_json", sensor_json, "");
+    ROS_INFO("bagfile: %s, sensor_json: %s", bagfile.c_str(), sensor_json.c_str());
 
     rosbag::Bag bag;
     bag.open(bagfile, rosbag::bagmode::Read);
-    double last_timestamp_lidar = -1;
-    deque<sensor_msgs::PointCloud2::ConstPtr> lidar_buffer;
-    double last_tiemstamp_imu = -1;
 
-    int pose_size = 101;
-    fstream inFile(file_path + "/datas/consistency/lidarPose.csv", ios::in);
+    int pose_size = 501;
     int jump_num = 1;
 
     string lineStr, str;
     PLV(3) poss(pose_size);
+    PLV(3) all_poss;
+    //    PLV(3) all_poss_vert;
     PLM(3) rots(pose_size);
+    PLM(3) all_rots;
+    //    PLM(3) all_rots_vert;
     Eigen::Matrix4d aff;
     vector<double> nums;
 
-    for(int i=0; i<pose_size; i++)
-    {
-        nums.clear();
-        for(int j=0; j<4; j++)
-        {
-            getline(inFile, lineStr);
-            stringstream ss(lineStr);
-            while(getline(ss, str, ','))
-                nums.push_back(stod(str));
-        }
-
-        for(int j=0; j<16; j++)
-            aff(j) = nums[j];
-
-        Eigen::Matrix4d affT = aff.transpose();
-
-        static Eigen::Vector3d pos0 = affT.block<3, 1>(0, 3);
-
-        rots[i] = affT.block<3, 3>(0, 0);
-        poss[i] = affT.block<3, 1>(0, 3) - pos0;
-    }
-
     vector<string> topics;
     topics.push_back(string("/laser_horiz/clouds"));
+    topics.push_back(string("/laser_vert/clouds"));
     topics.push_back(string("/imu"));
     topics.push_back(string("/tf"));
 
     rosbag::View view(bag, rosbag::TopicQuery(topics));
-    std::cout << "message view size: " << view.size() << std::endl;
+    std::cout << "read scans, message view size: " << view.size() << std::endl;
+    std::deque<std::pair<ros::Time, pcl::PointCloud<pcl::PointXYZI>>> lidar_buffer;
+    pcl::PointCloud<pcl::PointXYZI> pc_horiz, pc_vert;
 
-    ros::Rate rate(10);
+    ros::Time bag_begin_time = view.getBeginTime();
+    ros::Time bag_end_time = view.getEndTime();
+    tf2_ros::Buffer tf_buffer(ros::Duration(bag_end_time.toSec() - bag_begin_time.toSec() + 1));
+    ReadStaticTransformsFromJson(sensor_json, &tf_buffer);
+
+    //read and store all scans
+    for(rosbag::MessageInstance const msg: view)
+    {
+        if (msg.getTopic() == "/laser_horiz/clouds")
+        {
+            static int horiz_num = 0;
+            sensor_msgs::PointCloud2::ConstPtr scan = msg.instantiate<sensor_msgs::PointCloud2>();
+            pcl::PointCloud<pcl::PointXYZI> pc;
+            pcl::fromROSMsg(*scan, pc);
+            pc_horiz += pc;
+            pc_horiz.header.frame_id = "laser_horiz";
+            ++horiz_num;
+            if (horiz_num < 38) continue;
+            lidar_buffer.push_back({scan->header.stamp, pc_horiz});
+            pc_horiz.clear();
+            horiz_num = 0;
+        }
+        /*else if (msg.getTopic() == "/laser_vert/clouds")
+        {
+            static int vert_num = 0;
+            sensor_msgs::PointCloud2::ConstPtr scan = msg.instantiate<sensor_msgs::PointCloud2>();
+            pcl::PointCloud<pcl::PointXYZI> pc;
+            pcl::fromROSMsg(*scan, pc);
+            pc_vert += pc;
+            pc_vert.header.frame_id = "laser_vert";
+            ++vert_num;
+            if (vert_num < 38) continue;
+            lidar_buffer.push_back({scan->header.stamp, pc_vert});
+            pc_vert.clear();
+            vert_num = 0;
+        }*/
+    }
+    bag.close();
+
+    //read trajectory
+    std::cout << "read trajectory ..." << std::endl;
+    std::deque<pcl::PointCloud<PointType>> lidar_buffer2;
+
+    rosbag::Bag trajectory_bag;
+    trajectory_bag.open(trajectoryfile, rosbag::bagmode::Read);
+    topics.clear();
+    topics.push_back(string("/tf"));
+    topics.push_back(string("trajectory_0"));
+    rosbag::View view_tf(trajectory_bag, rosbag::TopicQuery(topics));
+
+    // tf2buffer.lookupTransform("map", "trajectory_0", ros::Time(0));
+    for (rosbag::MessageInstance const msg : view_tf) {
+        if (lidar_buffer.empty()) break;
+        if (msg.getTopic() == "/tf" )
+        {
+            tf2_msgs::TFMessage::ConstPtr tf_msg = msg.instantiate<tf2_msgs::TFMessage>();
+            tf_buffer.setTransform(tf_msg->transforms[0], "default_authority");
+            br.publish(tf_msg);
+        }
+        else if (msg.getTopic() == "trajectory_0")
+        {
+            geometry_msgs::TransformStamped::ConstPtr tf_msg = msg.instantiate<geometry_msgs::TransformStamped>();
+            tf_buffer.setTransform(*tf_msg, "default_authority");
+        }
+    }
+    int lidar_count = 0;
+    for (auto& ppc : lidar_buffer) {
+        ++lidar_count;
+        tf2::Transform transform;
+        try {
+            auto geotf = tf_buffer.lookupTransform("map", ppc.second.header.frame_id, ppc.first);
+            tf2::fromMsg(geotf.transform, transform);
+        }
+        catch(tf::TransformException &ex)
+        {
+            ROS_WARN("lookupTransform error: %s", ex.what());
+            continue;
+        }
+        Eigen::Quaterniond q(transform.getRotation().w(), transform.getRotation().x(), transform.getRotation().y(), transform.getRotation().z());
+        all_rots.push_back(q.toRotationMatrix());
+        auto t = transform.getOrigin();
+        all_poss.push_back(Eigen::Vector3d(t.x(), t.y(), t.z()));
+        // std::cout << "index: " << lidar_count << ", t: " << t.x() << ", " << t.y() << ", " << t.z() << ", \nR: " << q.toRotationMatrix() << std::endl;
+        pcl::PointCloud<PointType> pc;
+        for (auto& point : ppc.second) {
+            PointType p;
+            p.x = point.x;
+            p.y = point.y;
+            p.z = point.z;
+            p.intensity = point.intensity;
+            p.normal_x = 0;
+            p.normal_y = 0;
+            p.normal_z = 0;
+            pc.push_back(p);
+        }
+        lidar_buffer2.push_back(pc);
+    }
+    for (int i = 0; i < rots.size(); ++i) {
+        rots[i] << all_rots[i];
+        poss[i] << all_poss[i];
+    }
+    ros::Rate rate(20);
     pcl::PointCloud<pcl::PointXYZ> pl_orig;
-    pcl::PointCloud<PointType> pl_full, pl_surf, pl_path, pl_send, pl_send2;
+    pcl::PointCloud<PointType> pl_full, pl_surf, pl_surf_vert, pl_path, pl_send, pl_send2;
 
     sleep(1.5);
     for(int iterCount=0; iterCount<1 && n.ok(); iterCount++)
@@ -199,62 +294,17 @@ int main(int argc, char **argv)
         unordered_map<VOXEL_LOC, OCTO_TREE_ROOT*> surf_map;
         vector<IMUST> x_buf(win_size+fix_size);
 
-        printf("Show the point cloud generated by simulator...\n");
-        int m = 0;
-        static tf::StampedTransform global_pose;
-        global_pose.setOrigin(tf::Vector3(0.0, 0.0, 0.0));
-        global_pose.setRotation(tf::Quaternion(0.0, 0.0, 0.0, 1.0));
-        global_pose.frame_id_ = "map";
-        global_pose.child_frame_id_ = "base_link";
-        tf::Transform diff;
-        for(rosbag::MessageInstance const msg: view)
+        printf("Show the point cloud generated by rosbag...\n");
+        for(int m = 0; m < lidar_buffer2.size(); ++m)
         {
-            if (m == 0) global_pose.stamp_ = msg.getTime();
-            bool updated = false;
-            if (msg.getTopic() == "/tf")
-            {
-                tf2_msgs::TFMessage::ConstPtr tf_msg = msg.instantiate<tf2_msgs::TFMessage>();
-                br.publish(tf_msg);
-                global_pose.stamp_ = tf_msg->transforms.front().header.stamp;
-                updated = true;
-            }
-            else if (msg.getTopic() == "/laser_horiz/clouds")
-            {
-                sensor_msgs::PointCloud2::ConstPtr scan = msg.instantiate<sensor_msgs::PointCloud2>();
-                tf::StampedTransform transform;
-                listener.lookupTransform("base_link", "laser_horiz", ros::Time(0), transform);
-                Eigen::Quaterniond q(transform.getRotation().w(), transform.getRotation().x(), transform.getRotation().y(), transform.getRotation().z());
-                x_buf[win_count-1].R = q.toRotationMatrix();
-                auto t = transform.getOrigin();
-                x_buf[win_count-1].p = Eigen::Vector3d(t.x(), t.y(), t.z());
-                ++m;
-                pl_surf.clear();
-                pcl::PCLPointCloud2 pc;
-                pcl_conversions::copyPointCloud2MetaData(*scan, pc);
-                pcl::cop
-            }
-            else if (msg.getTopic() == "/imu")
-            {
-                if (updated)
-                {
-                    sensor_msgs::Imu::ConstPtr imu_msg = msg.instantiate<sensor_msgs::Imu>();
-                    auto t1 = global_pose.stamp_;
-                    auto t2 = imu_msg->header.stamp;
-                    auto dt = (t2 - t1).toSec();
-                    if (dt > 0)
-                    {
-                        auto dp = tf::Vector3(imu_msg->linear_acceleration.x, imu_msg->linear_acceleration.y, imu_msg->linear_acceleration.z);
-                        auto dr = tf::Quaternion(imu_msg->orientation.w, imu_msg->orientation.x, imu_msg->orientation.y, imu_msg->orientation.z) - global_pose.getRotation();
-                    }
-                }
-            }
-
             pl_surf.clear();
             //pcl::io::loadPCDFile(filename, pl_surf);
+            pl_surf = lidar_buffer2.at(m);
 
             win_count++;
             x_buf[win_count-1].R = rots[m];
             x_buf[win_count-1].p = poss[m];
+            std::cout << "p: " << x_buf[win_count-1].p << "\nR: " << x_buf[win_count-1].R << std::endl;
 
             pl_send = pl_surf;
             pl_transform(pl_send,x_buf[win_count-1].R, x_buf[win_count-1].p);
@@ -324,26 +374,25 @@ int main(int argc, char **argv)
             printf("The NEES for this Monto-Carlo experiment is %lf.\n", nees);
 
             /* 3 sigma bounds */
-            // for(int i=0; i<win_size; i++)
-            // {
-            //   cout << i << ", " << err(6*i) << ", " << err(6*i+1) << ", " << err(6*i+2) << ", " << err(6*i+3) << ", " << err(6*i+4) << ", " << err(6*i+5) << ", ";
-            //   cout << sqrt(Rcov(6*i, 6*i)) << "," << sqrt(Rcov(6*i+1, 6*i+1)) << "," << sqrt(Rcov(6*i+2, 6*i+2)) << "," << sqrt(Rcov(6*i+3, 6*i+3)) << "," << sqrt(Rcov(6*i+4, 6*i+4)) << "," << sqrt(Rcov(6*i+5, 6*i+5)) << endl;
-            // }
+            /*for(int i=0; i<win_size; i++)
+            {
+              cout << i << ", " << err(6*i) << ", " << err(6*i+1) << ", " << err(6*i+2) << ", " << err(6*i+3) << ", " << err(6*i+4) << ", " << err(6*i+5) << ", ";
+              cout << sqrt(Rcov(6*i, 6*i)) << "," << sqrt(Rcov(6*i+1, 6*i+1)) << "," << sqrt(Rcov(6*i+2, 6*i+2)) << "," << sqrt(Rcov(6*i+3, 6*i+3)) << "," << sqrt(Rcov(6*i+4, 6*i+4)) << "," << sqrt(Rcov(6*i+5, 6*i+5)) << endl;
+            }*/
 
             /* NEES for each pose (Require multiple Monte-Carlo experiments) */
-            // for(int i=0; i<win_size; i++)
-            // {
-            //   Eigen::Matrix<double, 6, 1> err6 = err.block<6, 1>(6*i, 0);
-            //   Eigen::Matrix<double, 6, 6> Rcov6 = Rcov.block<6, 6>(6*i, 6*i);
-            //   double nees = err6.transpose() * Rcov6.inverse() * err6;
-            //   double neesR = err6.head(3).transpose() * Rcov6.block<3, 3>(0, 0).inverse() * err6.head(3);
-            //   double neesT = err6.tail(3).transpose() * Rcov6.block<3, 3>(3, 3).inverse() * err6.tail(3);
-            //   cout << i << " " << nees << " " << neesR << " " << neesT << endl;
-            // }
+            /*for(int i=0; i<win_size; i++)
+            {
+              Eigen::Matrix<double, 6, 1> err6 = err.block<6, 1>(6*i, 0);
+              Eigen::Matrix<double, 6, 6> Rcov6 = Rcov.block<6, 6>(6*i, 6*i);
+              double nees = err6.transpose() * Rcov6.inverse() * err6;
+              double neesR = err6.head(3).transpose() * Rcov6.block<3, 3>(0, 0).inverse() * err6.head(3);
+              double neesT = err6.tail(3).transpose() * Rcov6.block<3, 3>(3, 3).inverse() * err6.tail(3);
+              cout << i << " " << nees << " " << neesR << " " << neesT << endl;
+            }*/
 
             break;
         }
-
     }
 
     ros::spin();
