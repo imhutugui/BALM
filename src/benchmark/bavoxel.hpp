@@ -14,7 +14,7 @@ double one_three = (1.0 / 3.0);
 
 double voxel_size = 1;
 int life_span = 1000;
-int win_size = 20;
+int win_size = 1000;
 
 int merge_enable = 1;
 

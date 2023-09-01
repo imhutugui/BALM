@@ -15,14 +15,14 @@ int fix_size = 1;
 
 const double one_three = (1.0 / 3.0);
 
-int layer_limit = 0;
+int layer_limit = 3;
 int layer_size[3] = {30, 25, 20};
 float eigen_value_array[3] = {1.0/64, 1.0/64, 1.0/64};
 int min_ps = 10;
 
-double voxel_size = 1;
+double voxel_size = 0.5;
 int life_span = 1000;
-int thd_num = 4;
+int thd_num = 8;
 
 class VOX_HESS
 {
@@ -1050,6 +1050,10 @@ public:
         
       D.diagonal() = Hess.diagonal();
       dxi = (Hess + u*D).ldlt().solve(-JacT);
+      std::cout << i << " - dxi: " << dxi.transpose() << std::endl;
+      // std::cout << "-- D: " << D.diagonal().transpose() << std::endl;
+      // std::cout << "-- Hess: " << Hess.diagonal().transpose() << std::endl;
+      // std::cout << "-- JacT: " << JacT.transpose() << std::endl;
 
       for(int j=0; j<win_size; j++)
       {

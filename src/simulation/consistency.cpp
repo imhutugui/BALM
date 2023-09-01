@@ -285,7 +285,7 @@ int main(int argc, char **argv)
     }
     ros::Rate rate(20);
     pcl::PointCloud<pcl::PointXYZ> pl_orig;
-    pcl::PointCloud<PointType> pl_full, pl_surf, pl_surf_vert, pl_path, pl_send, pl_send2;
+    pcl::PointCloud<PointType> pl_full, pl_surf, pl_path, pl_send, pl_send2;
 
     sleep(1.5);
     for(int iterCount=0; iterCount<1 && n.ok(); iterCount++)
@@ -304,7 +304,7 @@ int main(int argc, char **argv)
             win_count++;
             x_buf[win_count-1].R = rots[m];
             x_buf[win_count-1].p = poss[m];
-            std::cout << "p: " << x_buf[win_count-1].p << "\nR: " << x_buf[win_count-1].R << std::endl;
+            // std::cout << "p: " << x_buf[win_count-1].p << "\nR: " << x_buf[win_count-1].R << std::endl;
 
             pl_send = pl_surf;
             pl_transform(pl_send,x_buf[win_count-1].R, x_buf[win_count-1].p);
@@ -322,7 +322,6 @@ int main(int argc, char **argv)
             cut_voxel(surf_map, pl_surf, x_buf[win_count-1], win_count-1);
 
             if(win_count < win_size + fix_size) continue;
-
             vector<IMUST> x_buf2;
             for(auto iter=surf_map.begin(); iter!=surf_map.end(); ++iter)
             {
@@ -338,22 +337,26 @@ int main(int argc, char **argv)
             win_count -= fix_size;
 
             printf("The size of poses: %d\n", win_count);
+            std::cout << "The size of surf_map: " << surf_map.size() << std::endl;
 
             default_random_engine e(ros::Time::now().toSec());
             // default_random_engine e(200);
 
             /* Corrept the point cloud with random noise */
-            for(auto iter=surf_map.begin(); iter!=surf_map.end(); ++iter)
-                iter->second->corrupt(e, x_buf, win_count);
+            // for(auto iter=surf_map.begin(); iter!=surf_map.end(); ++iter)
+            //     iter->second->corrupt(e, x_buf, win_count);
 
             VOX_HESS voxhess;
-            for(auto iter=surf_map.begin(); iter!=surf_map.end(); iter++)
+            for(auto iter=surf_map.begin(); iter!=surf_map.end(); iter++){
                 iter->second->tras_opt(voxhess, win_count);
+                std::cout << "octo_state: " << iter->second->octo_state << ", push_state:" << iter->second->push_state << ", fix point size: " << iter->second->fix_point.N << std::endl;
+            }
 
             printf("Begin to optimize...\n");
 
             Eigen::MatrixXd Rcov(6*win_size, 6*win_size); Rcov.setZero();
             BALM2 opt_lsv;
+            std::cout << "voxhess size: " << voxhess.plvec_voxels.size() << std::endl;
             opt_lsv.damping_iter(x_buf, voxhess, Rcov);
 
             for(auto iter=surf_map.begin(); iter!=surf_map.end(); iter++)
