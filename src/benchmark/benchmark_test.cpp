@@ -464,6 +464,17 @@ int main(int argc, char **argv)
   malloc_trim(0);
   data_show(x_buf, pl_fulls);
   printf("\nRefined point cloud is published.\n");
+  pcl::PointCloud<PointType> full_map, temp;
+  for (int i = 0; i < x_buf.size(); ++i) {
+      auto& it = pl_fulls.at(i);
+      Eigen::Matrix4d aff = Eigen::Matrix4d::Identity();
+      aff.topLeftCorner(3,3) = x_buf[i].R;
+      aff.topRightCorner(3,1) = x_buf[i].p;
+      pcl::transformPointCloud(*it, temp, aff);
+      full_map += temp;
+      temp.clear();
+  }
+  pcl::io::savePCDFileASCII("/home/south/calib.pcd", full_map);
 
   ros::spin();
   return 0;
