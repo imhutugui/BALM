@@ -3,6 +3,7 @@
 #include <Eigen/Eigenvalues>
 #include <sensor_msgs/PointCloud2.h>
 #include <pcl_conversions/pcl_conversions.h>
+#include <pcl/common/transforms.h>
 #include <geometry_msgs/PoseArray.h>
 #include <random>
 #include <ctime>
@@ -15,10 +16,12 @@
 #include <rosbag/view.h>
 #include <tf/transform_broadcaster.h>
 #include <tf/transform_listener.h>
+#include <tf/transform_datatypes.h>
 #include <tf2_msgs/TFMessage.h>
 #include <geometry_msgs/TransformStamped.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <tf2_ros/buffer.h>
+#include <tf2_eigen/tf2_eigen.h>
 
 using namespace std;
 
@@ -106,7 +109,7 @@ void pub_pl_func(T &pl, ros::Publisher &pub)
   pl.height = 1; pl.width = pl.size();
   sensor_msgs::PointCloud2 output;
   pcl::toROSMsg(pl, output);
-  output.header.frame_id = "camera_init";
+  output.header.frame_id = "map";
   output.header.stamp = ros::Time::now();
   pub.publish(output);
 }
@@ -204,11 +207,11 @@ void data_show(vector<IMUST> x_buf, vector<pcl::PointCloud<PointType>::Ptr> &pl_
   for(int i=0; i<winsize; i++)
   {
     pcl::PointCloud<PointType> pl_tem = *pl_fulls[i];
-    down_sampling_voxel(pl_tem, 0.05);
+    down_sampling_voxel(pl_tem, 0.01);
     pl_transform(pl_tem, x_buf[i]);
     pl_send += pl_tem;
 
-    if((i%200==0 && i!=0) || i == winsize-1)
+    if((i%10==0 && i!=0) || i == winsize-1)
     {
       pub_pl_func(pl_send, pub_show);
       pl_send.clear();
@@ -258,7 +261,7 @@ int main(int argc, char **argv)
   rosbag::Bag bag;
   bag.open(bagfile, rosbag::bagmode::Read);
 
-  int pose_size = 1001;
+  int pose_size = 2001;
   int jump_num = 1;
 
   PLV(3) poss(pose_size);
@@ -345,9 +348,14 @@ int main(int argc, char **argv)
   int lidar_count = 0;
   for (auto& ppc : lidar_buffer) {
       ++lidar_count;
+      pcl::PointCloud<pcl::PointXYZI> cloud_body;
       tf2::Transform transform;
       try {
-          auto geotf = tf_buffer.lookupTransform("map", ppc.second.header.frame_id, ppc.first);
+          auto geotf = tf_buffer.lookupTransform("map", "imu_frame", ppc.first);
+          auto transformStamped = tf_buffer.lookupTransform("imu_frame", ppc.second.header.frame_id, ppc.first);
+          Eigen::Isometry3d aff;
+          aff = tf2::transformToEigen(transformStamped);
+          pcl::transformPointCloud(ppc.second, cloud_body, aff.matrix());
           tf2::fromMsg(geotf.transform, transform);
       }
       catch(tf::TransformException &ex)
@@ -359,9 +367,10 @@ int main(int argc, char **argv)
       all_rots.push_back(q.toRotationMatrix());
       auto t = transform.getOrigin();
       all_poss.push_back(Eigen::Vector3d(t.x(), t.y(), t.z()));
-      std::cout << "index: " << lidar_count << ", t: " << t.x() << ", " << t.y() << ", " << t.z() << ", \nR: " << q.toRotationMatrix() << std::endl;
+      // std::cout << "index: " << lidar_count << ", t: " << t.x() << ", " << t.y() << ", " << t.z() << ", \nR: " << q.toRotationMatrix() << std::endl;
       pcl::PointCloud<PointType> pc;
-      for (auto& point : ppc.second) {
+      pc.header.frame_id = "imu";
+      for (auto& point : cloud_body) {
           PointType p;
           p.x = point.x;
           p.y = point.y;
@@ -430,7 +439,7 @@ int main(int argc, char **argv)
     pl_send.clear(); pub_pl_func(pl_send, pub_cute);
 
     std::cout << "voxhess size: " << voxhess.plvec_voxels.size() << std::endl;
-    if(voxhess.plvec_voxels.size() < 3 * x_buf.size())
+    if(voxhess.plvec_voxels.size() < x_buf.size())
     {
       printf("Initial error too large.\n");
       printf("Please loose plane determination criteria for more planes.\n");
