@@ -10,14 +10,14 @@
 #include <ros/ros.h>
 #include <random>
 
-int win_size = 500;
+int win_size = 1200;
 int fix_size = 1;
 
 const double one_three = (1.0 / 3.0);
 
-int layer_limit = 3;
+int layer_limit = 2;
 int layer_size[3] = {30, 25, 20};
-float eigen_value_array[3] = {1.0/64, 1.0/64, 1.0/64};
+float eigen_value_array[3] = {1.0/16, 1.0/16, 1.0/16};
 int min_ps = 10;
 
 double voxel_size = 0.5;
@@ -673,7 +673,7 @@ public:
 
     // return decision < eigen_value_array[layer] && max_dis < 0.001;
 
-    return decision < eigen_value_array[layer] && max_dis < 0.001 && saes.eigenvalues()[2] / saes.eigenvalues()[1] < 25.0 && value_vector[0] < 1e-10;
+    return decision < eigen_value_array[layer] /*&& max_dis < 0.001 && saes.eigenvalues()[2] / saes.eigenvalues()[1] < 25.0 && value_vector[0] < 1e-10*/;
   }
 
   void cut_func(int ci)
@@ -1050,7 +1050,7 @@ public:
         
       D.diagonal() = Hess.diagonal();
       dxi = (Hess + u*D).ldlt().solve(-JacT);
-      std::cout << i << " - dxi: " << dxi.transpose() << std::endl;
+      // std::cout << i << " - dxi: " << dxi.transpose() << std::endl;
       // std::cout << "-- D: " << D.diagonal().transpose() << std::endl;
       // std::cout << "-- Hess: " << Hess.diagonal().transpose() << std::endl;
       // std::cout << "-- JacT: " << JacT.transpose() << std::endl;

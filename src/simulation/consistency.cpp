@@ -4,6 +4,7 @@
 #include "sensor_json_parser.h"
 #include <ros/ros.h>
 #include <pcl/io/pcd_io.h>
+#include <pcl/common/transforms.h>
 #include <Eigen/Eigenvalues>
 #include <sensor_msgs/PointCloud2.h>
 #include <sensor_msgs/Imu.h>
@@ -14,6 +15,7 @@
 #include <geometry_msgs/TransformStamped.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <tf2_ros/buffer.h>
+#include <tf2_eigen/tf2_eigen.h>
 #include <rosbag/bag.h>
 #include <rosbag/view.h>
 #include <random>
@@ -27,7 +29,7 @@ void pub_pl_func(T &pl, ros::Publisher &pub)
     pl.height = 1; pl.width = pl.size();
     sensor_msgs::PointCloud2 output;
     pcl::toROSMsg(pl, output);
-    output.header.frame_id = "camera_init";
+    output.header.frame_id = "map";
     output.header.stamp = ros::Time::now();
     pub.publish(output);
 }
@@ -47,7 +49,45 @@ void pub_odom_func(IMUST &xcurr)
     q.setZ(q_this.z());
     transform.setRotation(q);
     ros::Time ct = ros::Time::now();
-    br.sendTransform(tf::StampedTransform(transform, ct, "/camera_init", "/aft_mapped"));
+    br.sendTransform(tf::StampedTransform(transform, ct, "/map", "/base_link"));
+}
+
+ros::Publisher pub_test, pub_curr, pub_full, pub_path;
+
+void data_show(vector<IMUST> x_buf, vector<pcl::PointCloud<PointType>::Ptr> &pl_fulls)
+{
+    IMUST es0 = x_buf[0];
+    for(uint i=0; i<x_buf.size(); i++)
+    {
+        x_buf[i].p = es0.R.transpose() * (x_buf[i].p - es0.p);
+        x_buf[i].R = es0.R.transpose() * x_buf[i].R;
+    }
+
+    pcl::PointCloud<PointType> pl_send, pl_path;
+    int winsize = x_buf.size();
+    for(int i=0; i<winsize; i++)
+    {
+        pcl::PointCloud<PointType> pl_tem = *pl_fulls[i];
+        down_sampling_voxel(pl_tem, 0.01);
+        pl_transform(pl_tem, x_buf[i].R, x_buf[i].p);
+        pl_send += pl_tem;
+
+        if((i%2==0 && i!=0) || i == winsize-1)
+        {
+            pub_pl_func(pl_send, pub_curr);
+            pl_send.clear();
+            sleep(0.5);
+        }
+
+        PointType ap;
+        ap.x = x_buf[i].p.x();
+        ap.y = x_buf[i].p.y();
+        ap.z = x_buf[i].p.z();
+        ap.curvature = i;
+        pl_path.push_back(ap);
+    }
+
+    pub_pl_func(pl_path, pub_path);
 }
 
 geometry_msgs::Transform ToGeometryMsgTransform(const Eigen::Vector3d p, const Eigen::Quaterniond q)
@@ -128,7 +168,7 @@ std::vector<geometry_msgs::TransformStamped> ReadStaticTransformsFromJson(
     return transforms;
 }
 
-ros::Publisher pub_test, pub_curr, pub_full, pub_path;
+
 
 int main(int argc, char **argv)
 {
@@ -158,7 +198,7 @@ int main(int argc, char **argv)
     rosbag::Bag bag;
     bag.open(bagfile, rosbag::bagmode::Read);
 
-    int pose_size = 501;
+    int pose_size = 1201;
     int jump_num = 1;
 
     string lineStr, str;
@@ -179,7 +219,7 @@ int main(int argc, char **argv)
 
     rosbag::View view(bag, rosbag::TopicQuery(topics));
     std::cout << "read scans, message view size: " << view.size() << std::endl;
-    std::deque<std::pair<ros::Time, pcl::PointCloud<pcl::PointXYZI>>> lidar_buffer;
+    std::vector<std::pair<ros::Time, pcl::PointCloud<pcl::PointXYZI>>> lidar_buffer;
     pcl::PointCloud<pcl::PointXYZI> pc_horiz, pc_vert;
 
     ros::Time bag_begin_time = view.getBeginTime();
@@ -223,7 +263,8 @@ int main(int argc, char **argv)
 
     //read trajectory
     std::cout << "read trajectory ..." << std::endl;
-    std::deque<pcl::PointCloud<PointType>> lidar_buffer2;
+    std::vector<pcl::PointCloud<PointType>::Ptr> lidar_buffer2;
+    pcl::PointCloud<pcl::PointXYZI> lidar_bodys;
 
     rosbag::Bag trajectory_bag;
     trajectory_bag.open(trajectoryfile, rosbag::bagmode::Read);
@@ -250,9 +291,20 @@ int main(int argc, char **argv)
     int lidar_count = 0;
     for (auto& ppc : lidar_buffer) {
         ++lidar_count;
+        pcl::PointCloud<pcl::PointXYZI> cloud_body;
         tf2::Transform transform;
         try {
-            auto geotf = tf_buffer.lookupTransform("map", ppc.second.header.frame_id, ppc.first);
+            auto geotf = tf_buffer.lookupTransform("map", "imu_frame", ppc.first);
+            auto transformStamped = tf_buffer.lookupTransform("imu_frame", ppc.second.header.frame_id, ppc.first);
+            auto global_tf = tf_buffer.lookupTransform("map", ppc.second.header.frame_id, ppc.first);
+            Eigen::Isometry3d aff;
+            aff = tf2::transformToEigen(global_tf);
+            pcl::transformPointCloud(ppc.second, cloud_body, aff.matrix());
+            lidar_bodys += cloud_body;
+
+            cloud_body.clear();
+            aff = tf2::transformToEigen(transformStamped);
+            pcl::transformPointCloud(ppc.second, cloud_body, aff.matrix());
             tf2::fromMsg(geotf.transform, transform);
         }
         catch(tf::TransformException &ex)
@@ -266,7 +318,8 @@ int main(int argc, char **argv)
         all_poss.push_back(Eigen::Vector3d(t.x(), t.y(), t.z()));
         // std::cout << "index: " << lidar_count << ", t: " << t.x() << ", " << t.y() << ", " << t.z() << ", \nR: " << q.toRotationMatrix() << std::endl;
         pcl::PointCloud<PointType> pc;
-        for (auto& point : ppc.second) {
+        pc.header.frame_id = "imu";
+        for (auto& point : cloud_body) {
             PointType p;
             p.x = point.x;
             p.y = point.y;
@@ -277,11 +330,18 @@ int main(int argc, char **argv)
             p.normal_z = 0;
             pc.push_back(p);
         }
-        lidar_buffer2.push_back(pc);
+        lidar_buffer2.push_back(pc.makeShared());
     }
+    pcl::io::savePCDFileASCII("/home/south/result/calib_raw.pcd", lidar_bodys);
+    lidar_bodys.clear();
+    IMUST es0;
+    es0.R = all_rots[0];
+    es0.p = all_poss[0];
+    rots[0] = es0.R;
+    poss[0] = es0.p;
     for (int i = 0; i < rots.size(); ++i) {
-        rots[i] << all_rots[i];
-        poss[i] << all_poss[i];
+        rots[i] << es0.R.transpose() * all_rots[i];
+        poss[i] << es0.R.transpose() * (all_poss[i] - es0.p);
     }
     ros::Rate rate(20);
     pcl::PointCloud<pcl::PointXYZ> pl_orig;
@@ -299,7 +359,7 @@ int main(int argc, char **argv)
         {
             pl_surf.clear();
             //pcl::io::loadPCDFile(filename, pl_surf);
-            pl_surf = lidar_buffer2.at(m);
+            pl_surf = *lidar_buffer2.at(m);
 
             win_count++;
             x_buf[win_count-1].R = rots[m];
@@ -349,7 +409,7 @@ int main(int argc, char **argv)
             VOX_HESS voxhess;
             for(auto iter=surf_map.begin(); iter!=surf_map.end(); iter++){
                 iter->second->tras_opt(voxhess, win_count);
-                std::cout << "octo_state: " << iter->second->octo_state << ", push_state:" << iter->second->push_state << ", fix point size: " << iter->second->fix_point.N << std::endl;
+                // std::cout << "octo_state: " << iter->second->octo_state << ", push_state:" << iter->second->push_state << ", fix point size: " << iter->second->fix_point.N << std::endl;
             }
 
             printf("Begin to optimize...\n");
@@ -357,11 +417,11 @@ int main(int argc, char **argv)
             Eigen::MatrixXd Rcov(6*win_size, 6*win_size); Rcov.setZero();
             BALM2 opt_lsv;
             std::cout << "voxhess size: " << voxhess.plvec_voxels.size() << std::endl;
-            opt_lsv.damping_iter(x_buf, voxhess, Rcov);
+            opt_lsv.damping_iter(x_buf, voxhess, Rcov, 0);
 
-            for(auto iter=surf_map.begin(); iter!=surf_map.end(); iter++)
+            /*for(auto iter=surf_map.begin(); iter!=surf_map.end(); iter++)
                 delete iter->second;
-            surf_map.clear();
+            surf_map.clear();*/
 
             Eigen::VectorXd err(6*win_size); err.setZero();
             for(int i=0; i<win_size; i++)
@@ -393,6 +453,40 @@ int main(int argc, char **argv)
               double neesT = err6.tail(3).transpose() * Rcov6.block<3, 3>(3, 3).inverse() * err6.tail(3);
               cout << i << " " << nees << " " << neesR << " " << neesT << endl;
             }*/
+
+            printf("\nRefined point cloud is publishing...\n");
+            //malloc_trim(0);
+            data_show(x_buf, lidar_buffer2);
+            printf("\nRefined point cloud is published.\n");
+            std::vector<pcl::PointCloud<pcl::PointXYZI>> lidar_buffer3;
+            for (auto pair : lidar_buffer2) {
+                pcl::PointCloud<pcl::PointXYZI> pc;
+                for (auto it: pair->points) {
+                    pcl::PointXYZI p;
+                    p.x = it.x;
+                    p.y = it.y;
+                    p.z = it.z;
+                    p.intensity = it.intensity;
+                    pc.push_back(p);
+                }
+                lidar_buffer3.push_back(pc);
+            }
+            pcl::PointCloud<pcl::PointXYZI> full_map, temp;
+            for (int i = 0; i < x_buf.size(); ++i) {
+                auto& it = lidar_buffer3.at(i);
+                Eigen::Isometry3d iso = Eigen::Isometry3d::Identity();
+                Eigen::Matrix4d aff = Eigen::Matrix4d::Identity();
+                aff.topLeftCorner(3,3) = x_buf[i].R;
+                aff.topRightCorner(3,1) = x_buf[i].p;
+                iso.matrix() = aff;
+                pcl::transformPointCloud(it, temp, iso.matrix());
+                full_map += temp;
+                temp.clear();
+            }
+            for(auto iter=surf_map.begin(); iter!=surf_map.end(); iter++)
+                delete iter->second;
+            surf_map.clear();
+            pcl::io::savePCDFileASCII("/home/south/result/calib" + std::to_string(iterCount) + ".pcd", full_map);
 
             break;
         }

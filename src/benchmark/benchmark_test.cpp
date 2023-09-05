@@ -211,7 +211,7 @@ void data_show(vector<IMUST> x_buf, vector<pcl::PointCloud<PointType>::Ptr> &pl_
     pl_transform(pl_tem, x_buf[i]);
     pl_send += pl_tem;
 
-    if((i%10==0 && i!=0) || i == winsize-1)
+    if((i%2==0 && i!=0) || i == winsize-1)
     {
       pub_pl_func(pl_send, pub_show);
       pl_send.clear();
@@ -261,7 +261,7 @@ int main(int argc, char **argv)
   rosbag::Bag bag;
   bag.open(bagfile, rosbag::bagmode::Read);
 
-  int pose_size = 2001;
+  int pose_size = 1201;
   int jump_num = 1;
 
   PLV(3) poss(pose_size);
@@ -288,7 +288,7 @@ int main(int argc, char **argv)
   //read and store all scans
   for(rosbag::MessageInstance const msg: view)
   {
-      if (msg.getTopic() == "/laser_horiz/clouds")
+      /*if (msg.getTopic() == "/laser_horiz/clouds")
       {
           static int horiz_num = 0;
           sensor_msgs::PointCloud2::ConstPtr scan = msg.instantiate<sensor_msgs::PointCloud2>();
@@ -302,7 +302,7 @@ int main(int argc, char **argv)
           pc_horiz.clear();
           horiz_num = 0;
       }
-      else if (msg.getTopic() == "/laser_vert/clouds")
+      else*/ if (msg.getTopic() == "/laser_vert/clouds")
       {
           static int vert_num = 0;
           sensor_msgs::PointCloud2::ConstPtr scan = msg.instantiate<sensor_msgs::PointCloud2>();
@@ -439,13 +439,13 @@ int main(int argc, char **argv)
     pl_send.clear(); pub_pl_func(pl_send, pub_cute);
 
     std::cout << "voxhess size: " << voxhess.plvec_voxels.size() << std::endl;
-    if(voxhess.plvec_voxels.size() < x_buf.size())
+    /*if(voxhess.plvec_voxels.size() < x_buf.size())
     {
       printf("Initial error too large.\n");
       printf("Please loose plane determination criteria for more planes.\n");
       printf("The optimization is terminated.\n");
       exit(0);
-    }
+    }*/
 
     BALM2 opt_lsv;
     opt_lsv.damping_iter(x_buf, voxhess);
