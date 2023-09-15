@@ -11,6 +11,7 @@
 #include "sensor_json_parser.h"
 #include <pcl/filters/voxel_grid.h>
 #include <pcl/io/pcd_io.h>
+#include <pcl/point_types.h>
 #include <malloc.h>
 #include <rosbag/bag.h>
 #include <rosbag/view.h>
@@ -229,6 +230,22 @@ void data_show(vector<IMUST> x_buf, vector<pcl::PointCloud<PointType>::Ptr> &pl_
   pub_pl_func(pl_path, pub_path);
 }
 
+namespace pcl {
+struct PointXYZIT {
+    PCL_ADD_POINT4D
+    float intensity;
+    float time;
+    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+} EIGEN_ALIGN16;
+}
+POINT_CLOUD_REGISTER_POINT_STRUCT(pcl::PointXYZIT,
+    (float, x, x)
+    (float, y, y)
+    (float, z, z)
+    (float, intensity, intensity)
+    (float, time, time)
+)
+
 int main(int argc, char **argv)
 {
   ros::init(argc, argv, "benchmark2");
@@ -261,7 +278,7 @@ int main(int argc, char **argv)
   rosbag::Bag bag;
   bag.open(bagfile, rosbag::bagmode::Read);
 
-  int pose_size = 1201;
+  int pose_size = 2201;
   int jump_num = 1;
 
   PLV(3) poss(pose_size);
@@ -277,8 +294,8 @@ int main(int argc, char **argv)
 
   rosbag::View view(bag, rosbag::TopicQuery(topics));
   std::cout << "read scans, message view size: " << view.size() << std::endl;
-  std::deque<std::pair<ros::Time, pcl::PointCloud<pcl::PointXYZI>>> lidar_buffer;
-  pcl::PointCloud<pcl::PointXYZI> pc_horiz, pc_vert;
+  std::deque<std::pair<ros::Time, pcl::PointCloud<pcl::PointXYZIT>>> lidar_buffer;
+  pcl::PointCloud<pcl::PointXYZIT> pc_horiz, pc_vert;
 
   ros::Time bag_begin_time = view.getBeginTime();
   ros::Time bag_end_time = view.getEndTime();
@@ -288,11 +305,11 @@ int main(int argc, char **argv)
   //read and store all scans
   for(rosbag::MessageInstance const msg: view)
   {
-      /*if (msg.getTopic() == "/laser_horiz/clouds")
+      if (msg.getTopic() == "/laser_horiz/clouds")
       {
           static int horiz_num = 0;
           sensor_msgs::PointCloud2::ConstPtr scan = msg.instantiate<sensor_msgs::PointCloud2>();
-          pcl::PointCloud<pcl::PointXYZI> pc;
+          pcl::PointCloud<pcl::PointXYZIT> pc;
           pcl::fromROSMsg(*scan, pc);
           pc_horiz += pc;
           pc_horiz.header.frame_id = "laser_horiz";
@@ -302,11 +319,11 @@ int main(int argc, char **argv)
           pc_horiz.clear();
           horiz_num = 0;
       }
-      else*/ if (msg.getTopic() == "/laser_vert/clouds")
+      else if (msg.getTopic() == "/laser_vert/clouds")
       {
           static int vert_num = 0;
           sensor_msgs::PointCloud2::ConstPtr scan = msg.instantiate<sensor_msgs::PointCloud2>();
-          pcl::PointCloud<pcl::PointXYZI> pc;
+          pcl::PointCloud<pcl::PointXYZIT> pc;
           pcl::fromROSMsg(*scan, pc);
           pc_vert += pc;
           pc_vert.header.frame_id = "laser_vert";
@@ -348,11 +365,12 @@ int main(int argc, char **argv)
   int lidar_count = 0;
   for (auto& ppc : lidar_buffer) {
       ++lidar_count;
-      pcl::PointCloud<pcl::PointXYZI> cloud_body;
+      pcl::PointCloud<pcl::PointXYZIT> cloud_body;
+      geometry_msgs::TransformStamped transformStamped;
       tf2::Transform transform;
       try {
           auto geotf = tf_buffer.lookupTransform("map", "imu_frame", ppc.first);
-          auto transformStamped = tf_buffer.lookupTransform("imu_frame", ppc.second.header.frame_id, ppc.first);
+          transformStamped = tf_buffer.lookupTransform("imu_frame", ppc.second.header.frame_id, ppc.first);
           Eigen::Isometry3d aff;
           aff = tf2::transformToEigen(transformStamped);
           pcl::transformPointCloud(ppc.second, cloud_body, aff.matrix());
@@ -367,14 +385,29 @@ int main(int argc, char **argv)
       all_rots.push_back(q.toRotationMatrix());
       auto t = transform.getOrigin();
       all_poss.push_back(Eigen::Vector3d(t.x(), t.y(), t.z()));
+
       // std::cout << "index: " << lidar_count << ", t: " << t.x() << ", " << t.y() << ", " << t.z() << ", \nR: " << q.toRotationMatrix() << std::endl;
       pcl::PointCloud<PointType> pc;
-      pc.header.frame_id = "imu";
+      pc.header.frame_id = "imu_frame";
       for (auto& point : cloud_body) {
           PointType p;
+          Eigen::Vector3d in{point.x, point.y, point.z};
+          Eigen::Vector3d out;
           p.x = point.x;
           p.y = point.y;
           p.z = point.z;
+          auto transformMsg = tf_buffer.lookupTransform("map", "imu_frame", ros::Time(ppc.first.toSec() + point.time));
+          tf2::Transform transformNow;
+          tf2::fromMsg(transformMsg.transform, transformNow);
+          auto tfIncr = transform.inverse() * transformNow ;
+          transformMsg.transform = tf2::toMsg(tfIncr);
+          Eigen::Isometry3d aff;
+          aff = tf2::transformToEigen(transformMsg);
+
+          pcl::transformPoint(in, out, aff);
+          p.x = out[0];
+          p.y = out[1];
+          p.z = out[2];
           p.intensity = point.intensity;
           p.normal_x = 0;
           p.normal_y = 0;
