@@ -232,28 +232,21 @@ int main(int argc, char **argv)
     {
         if (msg.getTopic() == "/laser_horiz/clouds")
         {
-            static int horiz_num = 0;
             sensor_msgs::PointCloud2::ConstPtr scan = msg.instantiate<sensor_msgs::PointCloud2>();
             pcl::PointCloud<pcl::PointXYZI> pc;
             pcl::fromROSMsg(*scan, pc);
             pc_horiz += pc;
             pc_horiz.header.frame_id = "laser_horiz";
-            ++horiz_num;
-            if (horiz_num < 38) continue;
             lidar_buffer.push_back({scan->header.stamp, pc_horiz});
             pc_horiz.clear();
-            horiz_num = 0;
         }
         /*else if (msg.getTopic() == "/laser_vert/clouds")
         {
-            static int vert_num = 0;
             sensor_msgs::PointCloud2::ConstPtr scan = msg.instantiate<sensor_msgs::PointCloud2>();
             pcl::PointCloud<pcl::PointXYZI> pc;
             pcl::fromROSMsg(*scan, pc);
             pc_vert += pc;
             pc_vert.header.frame_id = "laser_vert";
-            ++vert_num;
-            if (vert_num < 38) continue;
             lidar_buffer.push_back({scan->header.stamp, pc_vert});
             pc_vert.clear();
             vert_num = 0;
